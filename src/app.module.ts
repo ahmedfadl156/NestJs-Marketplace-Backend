@@ -6,6 +6,11 @@ import { ConfigModule } from '@nestjs/config';
 import { validate } from './config/env.validation.js';
 import { AuthController } from './auth/auth.controller.js';
 import { AuthModule } from './auth/auth.module.js';
+import { APP_FILTER } from '@nestjs/core';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
+import { HealthController } from './health/health.controller.js';
+import { HealthModule } from './health/health.module.js';
+import { PrismaModule } from './prisma/prisma.module.js';
 
 const observeModule = createObserveModule();
 export const ObserveModule: any = observeModule.ObserveModule;
@@ -21,8 +26,17 @@ export const ObserveInstrument = observeModule.ObserveInstrument;
       validate
     }),
     AuthModule,
+    HealthModule,
+    PrismaModule,
   ],
-  controllers: [AppController, AuthController],
-  providers: [AppService],
+  controllers: [AppController, AuthController, HealthController],
+  providers: [
+    {
+      provide: APP_FILTER,
+      useClass: HttpExceptionFilter,
+    },
+    AppService
+  ],
 })
 export class AppModule {}
+
