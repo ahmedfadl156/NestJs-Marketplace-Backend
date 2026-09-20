@@ -14,11 +14,17 @@ export class RegisterDto {
     @MaxLength(128)
     password: string;
 
+    @Transform(({value}) =>
+        typeof value === 'string' ? value.trim() : value,
+    )
     @IsString()
     @MinLength(3)
     @MaxLength(100)
     firstName: string;
 
+    @Transform(({value}) =>
+        typeof value === 'string' ? value.trim() : value,
+    )
     @IsString()
     @MinLength(3)
     @MaxLength(100)

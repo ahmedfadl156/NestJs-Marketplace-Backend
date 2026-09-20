@@ -194,7 +194,7 @@ model RefreshToken {
 
   replacedByTokenId String? @unique @db.Uuid
 
-  session         Session       @relation(fields: [sessionId], references: [id])
+  session         Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   replacedByToken RefreshToken? @relation("RefreshTokenReplacement", fields: [replacedByTokenId], references: [id])
 
   replacesToken RefreshToken? @relation("RefreshTokenReplacement")

@@ -21,7 +21,8 @@ export class TokenService {
                 sid: sessionId
             },
             {
-                jwtid: randomBytes(16).toString('hex')
+                jwtid: randomBytes(16).toString('hex'),
+                expiresIn: '15m'
             },
         );
     }

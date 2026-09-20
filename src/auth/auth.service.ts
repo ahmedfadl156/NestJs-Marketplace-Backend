@@ -10,8 +10,11 @@ import { LoginDto } from './dto/login.dto.js';
 import { UsersService } from '../users/users.service.js';
 import { TokenService } from './security/token.service.js';
 
+const DUMMY_PASSWORD_HASH = '$argon2id$v=19$m=65536,p=4,t=3$Ifde6UBO/pNuST7SmySUdA$RClZtJrlvvBQ6XceJgEryBWx2ch0meLdFDLsFwPvzwg';
+
 @Injectable()
 export class AuthService {
+    private readonly logger = new Logger(AuthService.name);
     // هنا بنجهز Logger علشان نبدا نعرض كل log باسم الخدمة اتللى هو فيها علشان نعرف جا من اى خدمة
     constructor(
         private readonly prisma: PrismaService,
@@ -90,7 +93,17 @@ export class AuthService {
             };
         } catch (error) {
             if(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'){
-                throw new ConflictException('Registration Conflict');
+                this.logger.warn(`Registration conflict for normalized email ${email}`);
+                const existingUser = await this.usersService.findByEmail(email);
+
+                if (existingUser) {
+                    return {
+                        id: existingUser.id,
+                        email: existingUser.email,
+                        firstName: existingUser.firstName,
+                        lastName: existingUser.lastName
+                    };
+                }
             }
             throw error;
         }
@@ -174,12 +187,13 @@ export class AuthService {
         const user = await this.usersService.findForAuthentication(email);
 
         if(!user || !user.passwordCredential){
+            await this.passwordHasher.verify(dto.password, DUMMY_PASSWORD_HASH);
             throw new UnauthorizedException('Invalid Email or Password');
         }
         // هنعمل verify للباسورد ونتاكد انه صح
         const passwordValid = await this.passwordHasher.verify(
-            user.passwordCredential.passwordHash,
-            dto.password
+            dto.password,
+            user.passwordCredential.passwordHash
         );
 
         // لو غلط هنرمى ايرور
