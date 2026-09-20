@@ -13,62 +13,195 @@ enum UserStatus {
 }
 
 model Role {
-  id  String @id @default(uuid(7)) @db.Uuid
-  name  String @unique
-  description String
-  isSystem  Boolean @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(uuid(7)) @db.Uuid
+  name        String   @unique
+  description String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  users UserRole[]
+  users       UserRole[]
   permissions RolePermission[]
 }
 
 model Permission {
-  id  String @id @default(uuid(7)) @db.Uuid
-  resource  String
-  action  String
+  id          String   @id @default(uuid(7)) @db.Uuid
+  resource    String
+  action      String
   description String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   roles RolePermission[]
-  @@unique([resource, action])  // => دى فيما معناها ان كل permission لازم يكون unique يعنى مفيش اتنين permission بنفس ال resource و ال action  
+
+  @@unique([resource, action])
 }
 
 model UserRole {
-  userId   String   @db.Uuid
-  roleId   String   @db.Uuid
+  userId    String   @db.Uuid
+  roleId    String   @db.Uuid
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id] , onDelete: Cascade)
-  role Role @relation(fields: [roleId], references: [id] , onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([userId, roleId])
 }
 
 model RolePermission {
-  roleId   String   @db.Uuid
-  permissionId   String   @db.Uuid
-  createdAt DateTime @default(now())
+  roleId       String   @db.Uuid
+  permissionId String   @db.Uuid
+  createdAt    DateTime @default(now())
 
-  role Role @relation(fields: [roleId], references: [id] , onDelete: Cascade)
-  permission Permission @relation(fields: [permissionId], references: [id] , onDelete: Cascade)
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
 }
 
 model User {
-  id   String  @id @default(uuid(7)) @db.Uuid
-  email String  @unique 
-  password String 
-  firstName String
-  lastName String
-  emailVerifiedAt  DateTime?
-  status  UserStatus @default(ACTIVE)
-  roles   UserRole[]
+  id              String     @id @default(uuid(7)) @db.Uuid
+  email           String     @unique
+  firstName       String
+  lastName        String
+  emailVerifiedAt DateTime?
+  status          UserStatus @default(ACTIVE)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  roles                       UserRole[]
+  passwordCredential          PasswordCredential?
+  emailVerificationChallenges EmailVerificationChallenge[]
+  securityEvents              SecurityEvent[]
+  seller                      Seller?
+  sessions                    Session[]
+}
+
+model PasswordCredential {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  userId            String   @unique @db.Uuid
+  passwordHash      String
+  passwordChangedAt DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model EmailVerificationChallenge {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCEEDED
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_CHANGED
+  EMAIL_VERIFIED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  SESSION_REVOKED
+  REGISTRATION_SUCCEEDED
+}
+
+model SecurityEvent {
+  id         String            @id @default(uuid(7)) @db.Uuid
+  userId     String?           @db.Uuid
+  type       SecurityEventType
+  occurredAt DateTime          @default(now())
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, occurredAt])
+  @@index([type, occurredAt])
+  @@index([occurredAt])
+}
+
+enum SessionStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum SessionRevocationReason {
+  USER_LOGOUT
+  USER_REVOKED
+  ADMIN_REVOKED
+  PASSWORD_CHANGED
+  SECURITY_RESPONSE
+}
+
+model Session {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  status     SessionStatus @default(ACTIVE)
+  clientType String
+
+  ipAddress String?
+  userAgent String?
+
   createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  lastUsedAt DateTime @default(now())
+
+  idleExpiresAt     DateTime
+  absoluteExpiresAt DateTime
+
+  revokedAt        DateTime?
+  revocationReason SessionRevocationReason?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  refreshTokens RefreshToken[]
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@index([absoluteExpiresAt])
+}
+
+enum RefreshTokenStatus {
+  ACTIVE
+  USED
+  REVOKED
+  EXPIRED
+}
+
+model RefreshToken {
+  id        String             @id @default(uuid(7)) @db.Uuid
+  sessionId String             @db.Uuid
+  tokenHash String             @unique
+  status    RefreshTokenStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  usedAt    DateTime?
+  revokedAt DateTime?
+
+  replacedByTokenId String? @unique @db.Uuid
+
+  session         Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  replacedByToken RefreshToken? @relation("RefreshTokenReplacement", fields: [replacedByTokenId], references: [id])
+
+  replacesToken RefreshToken? @relation("RefreshTokenReplacement")
+
+  @@index([sessionId, status])
+  @@index([sessionId, createdAt])
+  @@index([expiresAt])
 }
 
 enum StoreStatus {
@@ -79,12 +212,129 @@ enum StoreStatus {
 }
 
 model Store {
-  id  String @id  @default(uuid(7))  @db.Uuid
-  sellerId  String @db.Uuid
-  name String
-  slug  String 
-  description  String?
-  status  StoreStatus  @default(DRAFT)
-  createdAt DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id          String      @id @default(uuid(7)) @db.Uuid
+  sellerId    String      @db.Uuid
+  name        String
+  slug        String      @unique
+  description String?
+  status      StoreStatus @default(DRAFT)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  seller   Seller    @relation(fields: [sellerId], references: [id])
+  listings Listing[]
+}
+
+enum SellerType {
+  INDIVIDUAL
+  BUSINESS
+}
+
+enum SellerLifecycleStatus {
+  ONBOARDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum SellerVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model Seller {
+  id                 String                   @id @default(uuid(7)) @db.Uuid
+  userId             String                   @unique @db.Uuid
+  type               SellerType
+  lifecycleStatus    SellerLifecycleStatus    @default(ONBOARDING)
+  verificationStatus SellerVerificationStatus @default(PENDING)
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id])
+  stores Store[]
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model Product {
+  id          String        @id @default(uuid(7)) @db.Uuid
+  name        String
+  slug        String        @unique
+  description String?
+  status      ProductStatus @default(DRAFT)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  variants ProductVariant[]
+  options  ProductOption[]
+}
+
+model ProductVariant {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  productId String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product      Product                     @relation(fields: [productId], references: [id])
+  listings     Listing[]
+  optionValues ProductVariantOptionValue[]
+}
+
+model Listing {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  storeId          String   @db.Uuid
+  productVariantId String   @db.Uuid
+  sellerSku        String
+  price            Decimal
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  store          Store          @relation(fields: [storeId], references: [id])
+  productVariant ProductVariant @relation(fields: [productVariantId], references: [id])
+
+  @@unique([storeId, sellerSku])
+}
+
+model ProductOption {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  productId String   @db.Uuid
+  name      String
+  position  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product Product              @relation(fields: [productId], references: [id])
+  values  ProductOptionValue[]
+
+  @@unique([productId, name])
+}
+
+model ProductOptionValue {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  optionId  String   @db.Uuid
+  value     String
+  position  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  option        ProductOption               @relation(fields: [optionId], references: [id])
+  variantValues ProductVariantOptionValue[]
+
+  @@unique([optionId, value])
+}
+
+model ProductVariantOptionValue {
+  variantId     String @db.Uuid
+  optionValueId String @db.Uuid
+
+  variant     ProductVariant     @relation(fields: [variantId], references: [id])
+  optionValue ProductOptionValue @relation(fields: [optionValueId], references: [id])
+
+  @@id([variantId, optionValueId])
 }
