@@ -8,13 +8,17 @@ import { PrismaModule } from '../prisma/prisma.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { JwtModule } from '@nestjs/jwt';
 import { TokenService } from './security/token.service.js';
+import { ConfigService } from '@nestjs/config';
 
 @Module({
     imports: [
         PrismaModule,
         UsersModule,
-        JwtModule.register({
-            secret: process.env.JWT_ACCESS_SECRET,
+        JwtModule.registerAsync({
+            inject: [ConfigService],
+            useFactory: (configService: ConfigService) => ({
+                secret: configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
+            }),
         }),
     ],
     controllers: [AuthController],

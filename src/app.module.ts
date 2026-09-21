@@ -23,7 +23,8 @@ export const ObserveInstrument = observeModule.ObserveInstrument;
       serviceId: 'marketplace-backend',
     }),
     ConfigModule.forRoot({
-      validate
+      validate,
+      isGlobal: true,
     }),
     AuthModule,
     HealthModule,
