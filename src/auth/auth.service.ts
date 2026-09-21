@@ -9,6 +9,7 @@ import { Prisma } from '../generated/prisma/client.js';
 import { LoginDto } from './dto/login.dto.js';
 import { UsersService } from '../users/users.service.js';
 import { TokenService } from './security/token.service.js';
+import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 
 const DUMMY_PASSWORD_HASH = '$argon2id$v=19$m=65536,p=4,t=3$Ifde6UBO/pNuST7SmySUdA$RClZtJrlvvBQ6XceJgEryBWx2ch0meLdFDLsFwPvzwg';
 
@@ -94,16 +95,7 @@ export class AuthService {
         } catch (error) {
             if(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'){
                 this.logger.warn(`Registration conflict for normalized email ${email}`);
-                const existingUser = await this.usersService.findByEmail(email);
-
-                if (existingUser) {
-                    return {
-                        id: existingUser.id,
-                        email: existingUser.email,
-                        firstName: existingUser.firstName,
-                        lastName: existingUser.lastName
-                    };
-                }
+                throw new ConflictException("Registration Conflict.")
             }
             throw error;
         }
@@ -257,6 +249,267 @@ export class AuthService {
         return {
             accessToken,
             refreshToken: rawRefreshToken
+        }
+    }
+
+
+    /*
+    RefreshToken
+      │
+      ▼
+hash(token)
+      │
+      ▼
+find RefreshToken
+      │
+      ├── not found ──────→ 401
+      │
+      ├── USED ────────────→ replay detection
+      │
+      ├── REVOKED ─────────→ 401
+      │
+      ├── expired ─────────→ 401
+      │
+      ▼
+validate Session
+      │
+      ▼
+mark old token USED
+      │
+      ▼
+create new RefreshToken
+      │
+      ▼
+link old → new
+      │
+      ▼
+update Session.lastUsedAt
+      │
+      ▼
+SecurityEvent
+      │
+      ▼
+new AccessToken
+*/
+
+// الميثود اللى هنستعلمها علشان نكتشف لما يحصل استخدام خاطى لتوكن تم اتسخدامه قبل كدا
+    private async handleRefreshTokenReplay(
+        sessionId: string,
+        context: AuthRequestContext
+    ) {
+        await this.prisma.$transaction(async (tx) => {
+            const session = await tx.session.update({
+                where: {
+                    id: sessionId,
+                },
+                data: {
+                    status: 'REVOKED',
+                    revokedAt: new Date(),
+                    revocationReason: 'SECURITY_RESPONSE',
+                },
+            });
+
+            await tx.refreshToken.updateMany({
+                where: {
+                    sessionId,
+                    status: 'ACTIVE'
+                },
+                data: {
+                    status: 'REVOKED',
+                    revokedAt: new Date()
+                }
+            });
+
+            await tx.securityEvent.create({
+                data: {
+                    userId: session.userId,
+                    type: 'SESSION_REVOKED',
+                    ipAddress: context.ipAddress,
+                    userAgent: context.userAgent,
+                    metadata: {
+                        reason: 'REFRESH_TOKEN_REPLAY',
+                        sessionId
+                    }
+                }
+            })
+        })
+    }
+// الفانكشن المسئولة عن انها تعمل ريفرش للتوكن لما ينتهى او يحصل فيه اى حاجة
+    async refresh(
+        dto: RefreshTokenDto,
+        context: AuthRequestContext
+    ) {
+        const tokenHash = this.tokenService.hashRefreshToken(dto.refreshToken);
+
+        const now = new Date();
+
+        const refreshToken = await this.prisma.refreshToken.findUnique({
+            where: {tokenHash},
+            include: {
+                session: true
+            }
+        });
+
+        if(!refreshToken){
+            throw new UnauthorizedException("Invalid refresh token");
+        }
+
+        if(refreshToken.status === 'USED'){
+            await this.handleRefreshTokenReplay(refreshToken.sessionId , context);
+
+            throw new UnauthorizedException('Invalid refresh token');
+        }
+
+        if(refreshToken.status !== 'ACTIVE' || refreshToken.expiresAt <= now){
+            throw new UnauthorizedException('Invalid refresh token');
+        }
+
+        const session = refreshToken.session;
+
+        if(session.status !== 'ACTIVE' || session.absoluteExpiresAt <= now || session.idleExpiresAt <= now){
+            throw new UnauthorizedException('Invalid refresh token');
+        }
+
+        const newRawRefreshToken = this.tokenService.generateRefreshToken();
+        const newRefershTokenHash = this.tokenService.hashRefreshToken(newRawRefreshToken);
+        const newRefreshToenExpiresAt = new Date(
+            now.getTime() + 30 * 24 * 60 * 60 * 1000
+        );
+
+        const result = await this.prisma.$transaction(async (tx) => {
+            const consumed = await tx.refreshToken.updateMany({
+                where: {
+                    id: refreshToken.id,
+                    status: 'ACTIVE',
+                    usedAt: null,
+                    revokedAt: null,
+                    expiresAt: {
+                        gt: now,
+                    },
+                },
+                data: {
+                    status: 'USED',
+                    usedAt: now,
+                }
+            });
+
+            if(consumed.count !== 1){
+                throw new UnauthorizedException("Invalid refresh token");
+            }
+
+            const newRefreshToken = await tx.refreshToken.create({
+                data: {
+                    sessionId: session.id,
+                    tokenHash: newRefershTokenHash,
+                    expiresAt: newRefreshToenExpiresAt
+                }
+            });
+
+            await tx.refreshToken.update({
+                where: {
+                    id: refreshToken.id,
+                },
+                data: {
+                    replacedByTokenId: newRefreshToken.id
+                }
+            });
+
+            const updatedSession = await tx.session.update({
+                where: {
+                    id: session.id,
+                },
+                data: {
+                    lastUsedAt: now,
+                    idleExpiresAt: new Date(
+                        now.getTime() + 30 * 24 * 60 * 60 * 1000
+                    )
+                }
+            });
+
+            await tx.securityEvent.create({
+                data: {
+                    userId: session.userId,
+                    type: 'LOGIN_SUCCEEDED',
+                    ipAddress: context.ipAddress,
+                    userAgent: context.userAgent,
+                    metadata: {
+                        event: 'REFRESH_TOKEN_ROTATED',
+                        sessionId: session.id
+                    }
+                }
+            });
+
+            return updatedSession;
+        })
+
+        const accessToken = await this.tokenService.generateAccessToken(
+            session.userId,
+            result.id
+        );
+
+        return {
+            accessToken,
+            refreshToken: newRawRefreshToken,
+        }
+    }
+
+    // هنا السيرفيس المسؤلة عن تسجيل الخروج لليوزر من السيشن الحالية
+    async logout(refreshToken: string){
+        const tokenHash = this.tokenService.hashRefreshToken(refreshToken);
+        const now = new Date();
+
+        const token = await this.prisma.refreshToken.findUnique({
+            where: {
+                tokenHash,
+            },
+            include: {
+                session: true
+            }
+        });
+
+        if(!token){
+            return {
+                message: 'Logged out successfully.'
+            }
+        };
+
+        await this.prisma.$transaction(async (tx) => {
+            await tx.session.updateMany({
+                where: {
+                    id: token.sessionId,
+                    status: 'ACTIVE'
+                },
+                data: {
+                    status: 'REVOKED',
+                    revokedAt: now,
+                    revocationReason: 'USER_LOGOUT'
+                },
+            });
+
+            await tx.refreshToken.updateMany({
+                where: {
+                    sessionId: token.sessionId,
+                    status: 'ACTIVE'
+                },
+                data: {
+                    status: 'REVOKED',
+                    revokedAt: now
+                },
+            });
+
+            await tx.securityEvent.create({
+                data: {
+                    userId: token.session.userId,
+                    type: 'LOGOUT',
+                    metadata: {
+                        sessionId: token.sessionId
+                    }
+                }
+            });
+        })
+
+        return {
+            message: 'Logged out successfully.',
         }
     }
 }
