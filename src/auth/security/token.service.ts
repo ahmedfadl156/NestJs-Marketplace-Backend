@@ -22,6 +22,8 @@ export class TokenService {
             },
             {
                 jwtid: randomBytes(16).toString('hex'),
+                issuer: process.env.JWT_ISSUER,
+                audience: process.env.JWT_AUDIENCE,
                 expiresIn: '15m'
             },
         );

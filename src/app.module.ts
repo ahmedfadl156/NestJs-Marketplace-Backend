@@ -11,6 +11,7 @@ import { HealthController } from './health/health.controller.js';
 import { HealthModule } from './health/health.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { UsersModule } from './users/users.module.js';
+import { EmailModule } from './infrastructure/email/email.module.js';
 
 const observeModule = createObserveModule();
 export const ObserveModule: any = observeModule.ObserveModule;
@@ -30,6 +31,7 @@ export const ObserveInstrument = observeModule.ObserveInstrument;
     HealthModule,
     PrismaModule,
     UsersModule,
+    EmailModule,
   ],
   controllers: [AppController, HealthController],
   providers: [

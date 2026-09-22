@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto.js';
 import { EmailNormalizer } from './security/email-normalizer.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -10,6 +10,8 @@ import { LoginDto } from './dto/login.dto.js';
 import { UsersService } from '../users/users.service.js';
 import { TokenService } from './security/token.service.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
+import { EMAIL_SERVICE } from '../infrastructure/email/email.token.js';
+import type { EmailService } from '../infrastructure/email/email.service.js';
 
 const DUMMY_PASSWORD_HASH = '$argon2id$v=19$m=65536,p=4,t=3$Ifde6UBO/pNuST7SmySUdA$RClZtJrlvvBQ6XceJgEryBWx2ch0meLdFDLsFwPvzwg';
 
@@ -23,7 +25,9 @@ export class AuthService {
         private readonly emailNormalizer: EmailNormalizer,
         private readonly verificationTokenService: VerificationTokenService,
         private readonly usersService: UsersService,
-        private readonly tokenService: TokenService
+        private readonly tokenService: TokenService,
+        @Inject(EMAIL_SERVICE)
+        private readonly emailService: EmailService,
     ){}
     // الفانكشن الخاصة السيرفس بعملية تسجيل مستخدم جديد
     async register(dto: RegisterDto , context: AuthRequestContext) {
@@ -85,6 +89,12 @@ export class AuthService {
                     return createdUser;
                 }
             );
+
+            await this.emailService.sendVerificationEmail({
+                to: user.email,
+                firstName: user.firstName,
+                token: rawVerificationToken
+            })
             // هنا بقا بعد مانخلص العميلات وتنجح هنبعت الايميل ليةر علشان يكمل تسجيل
             return {
                 id: user.id,
@@ -511,5 +521,15 @@ new AccessToken
         return {
             message: 'Logged out successfully.',
         }
+    }
+
+    async getCurrentUser(userId: string) {
+        const user = await this.usersService.findCurrentUserById(userId);
+
+        if(!user){
+            throw new UnauthorizedException("Unaouthorized.");
+        }
+
+        return user;
     }
 }
