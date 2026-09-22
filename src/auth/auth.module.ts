@@ -9,6 +9,9 @@ import { UsersModule } from '../users/users.module.js';
 import { JwtModule } from '@nestjs/jwt';
 import { TokenService } from './security/token.service.js';
 import { ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
+import { EmailModule } from '../infrastructure/email/email.module.js';
 
 @Module({
     imports: [
@@ -20,8 +23,19 @@ import { ConfigService } from '@nestjs/config';
                 secret: configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
             }),
         }),
+        EmailModule
     ],
     controllers: [AuthController],
-    providers: [AuthService , PasswordHasher , VerificationTokenService , EmailNormalizer , TokenService],
+    providers: [
+        AuthService,
+        PasswordHasher,
+        VerificationTokenService,
+        EmailNormalizer,
+        TokenService,
+        {
+            provide: APP_GUARD,
+            useClass: JwtAuthGuard,
+        },
+    ],
 })
 export class AuthModule {}

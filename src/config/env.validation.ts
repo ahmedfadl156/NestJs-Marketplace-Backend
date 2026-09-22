@@ -1,5 +1,5 @@
-import { plainToInstance } from "class-transformer";
-import { IsEnum, IsNumber, IsString, Max, Min, MinLength, validateSync } from "class-validator";
+import { plainToInstance, Transform } from "class-transformer";
+import { IsBoolean, IsEmail, IsEnum, IsNumber, IsString, Max, Min, MinLength, validateSync } from "class-validator";
 
 enum Environment {
     Development = "development",
@@ -20,12 +20,40 @@ class EnvironmentVariables {
     @IsString()
     @MinLength(1)
     JWT_ACCESS_SECRET: string;
+    @IsString()
+    MAIL_HOST: string;
+
+    @Min(1)
+    @Max(65535)
+    @IsNumber()
+    MAIL_PORT: number;
+    
+    @Transform(({ value }) => {
+        if (value === undefined) {
+            return value;
+        }
+
+        return value === true || value === "true";
+    })
+    @IsBoolean()
+    MAIL_SECURE: boolean;
+
+    @IsEmail()
+    MAIL_FROM: string;
+
+    @IsString()
+    APP_BASE_URL: string;
 }
 
 export function validate(config: Record<string , unknown>){
+    const normalizedConfig = {
+        ...config,
+        MAIL_SECURE: config.MAIL_SECURE === true || config.MAIL_SECURE === "true",
+    };
+
     const validatedConfig = plainToInstance(
         EnvironmentVariables,
-        config,
+        normalizedConfig,
         {enableImplicitConversion: true}
     );
 

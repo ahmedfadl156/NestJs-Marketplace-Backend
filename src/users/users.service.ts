@@ -21,4 +21,22 @@ export class UsersService {
             }
         })
     }
+
+    async findCurrentUserById(userId: string) {
+        return this.prisma.user.findUnique({
+            where: {
+                id: userId
+            },
+            select: {
+                id: true,
+                email: true,
+                firstName: true,
+                lastName: true,
+                emailVerifiedAt: true,
+                status: true,
+                createdAt: true,
+                updatedAt: true
+            }
+        });
+    }
 }
