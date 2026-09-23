@@ -8,6 +8,7 @@ import { PrismaModule } from '../prisma/prisma.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { JwtModule } from '@nestjs/jwt';
 import { TokenService } from './security/token.service.js';
+import { AuthCookieService } from './security/auth-cookie.service.js';
 import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
@@ -32,6 +33,7 @@ import { EmailModule } from '../infrastructure/email/email.module.js';
         VerificationTokenService,
         EmailNormalizer,
         TokenService,
+        AuthCookieService,
         {
             provide: APP_GUARD,
             useClass: JwtAuthGuard,

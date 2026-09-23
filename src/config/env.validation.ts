@@ -43,6 +43,16 @@ class EnvironmentVariables {
 
     @IsString()
     APP_BASE_URL: string;
+
+    @IsString()
+    AUTH_REFRESH_COOKIE_NAME: string;
+
+    @IsBoolean()
+    AUTH_REFRESH_COOKIE_SECURE: boolean;
+
+    @IsString()
+    AUTH_REFRESH_COOKIE_SAME_SITE: string;
+
 }
 
 export function validate(config: Record<string , unknown>){

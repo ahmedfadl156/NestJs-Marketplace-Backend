@@ -12,6 +12,8 @@ import { TokenService } from './security/token.service.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { EMAIL_SERVICE } from '../infrastructure/email/email.token.js';
 import type { EmailService } from '../infrastructure/email/email.service.js';
+import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
+import { ResetPasswordDto } from './dto/reset-password.dto.js';
 
 const DUMMY_PASSWORD_HASH = '$argon2id$v=19$m=65536,p=4,t=3$Ifde6UBO/pNuST7SmySUdA$RClZtJrlvvBQ6XceJgEryBWx2ch0meLdFDLsFwPvzwg';
 
@@ -531,5 +533,177 @@ new AccessToken
         }
 
         return user;
+    }
+
+
+    /*
+        1-Forgot Password => POST Request for route
+        2-email input
+        3-search if email exist or not 
+        4-if exist send random reset token and send it to the user
+        5-then user sned with token link
+        6- Reset Password => POST Request for the route by the link
+        7- token validate
+        8-new password input
+        9- hash the password by argon2id
+        10- save the hahsed password in DB
+        11- revoke old sessions
+        12- create secuirty event for changing password
+    */ 
+
+    async forgotPassword(dto: ForgotPasswordDto): Promise<void> {
+        // الاول هنعمل نورماليز للايميل علشان يبقى جاى مظبوط
+        const email = this.emailNormalizer.normalize(dto.email);
+        // هناخد الايميل علشان نشوف هل موجود ولا لا يوزر مرتبط بالايميل دا
+        const user = await this.usersService.findByEmail(email);
+
+        if(!user){
+            return;
+        }
+
+        // نعمل توكن جديد ونعمله هاش علشان نخزن الهاش فى الداتابيز ونبعت العادى لليوزر
+        const rawToken = this.verificationTokenService.generate();
+        const tokenHash = this.verificationTokenService.hash(rawToken);
+        const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+        await this.prisma.$transaction(async (tx) => {
+            await tx.passwordResetChallenge.create({
+                data: {
+                    userId: user.id,
+                    tokenHash,
+                    expiresAt,
+                }
+            });
+
+            await tx.securityEvent.create({
+                data: {
+                    userId: user.id,
+                    type: 'PASSWORD_RESET_REQUESTED',
+                }
+            });
+        })
+
+        await this.emailService.sendPasswordResetEmail({
+            to: user.email,
+            firstName: user.firstName,
+            token: rawToken
+        })
+    }
+
+    async resetPassword(dto: ResetPasswordDto): Promise<void> {
+        // بعمل الاول هاش للاتوكن والباسورد وبعمل هاش للباسورد
+        // برا الترانزاكشن علشان دى عملية تقيلة على ال CPU مينفعش اعملها جوا الداتابيز هتقعد فترة طويلة 
+        const tokenHash = this.verificationTokenService.hash(dto.token);
+        const passwordHash = await this.passwordHasher.hash(dto.newPassword);
+
+        const now = new Date();
+
+        const result = await this.prisma.$transaction(async (tx) => {
+            const challenge = await tx.passwordResetChallenge.findUnique({
+                where: {
+                    tokenHash,
+                },
+            });
+
+            if(!challenge){
+                throw new UnauthorizedException('Invalid or expired password reset token');
+            }
+
+            if(challenge.usedAt || challenge.revokedAt || challenge.expiresAt <= now){
+                throw new UnauthorizedException('Invalid or expired password reset token');
+            }
+
+            const consumed = await tx.passwordResetChallenge.updateMany({
+                where: {
+                    id: challenge.id,
+                    usedAt: null,
+                    revokedAt: null,
+                    expiresAt: {
+                        gt: now
+                    }
+                },
+                data: {
+                    usedAt: now,
+                }
+            });
+
+            if(consumed.count !== 1){
+                throw new UnauthorizedException('Invalid or expired password reset token'); 
+            };
+
+            await tx.passwordCredential.update({
+                where: {
+                    userId: challenge.userId,
+                },
+                data: {
+                    passwordHash,
+                    passwordChangedAt: now,
+                }
+            })
+
+            await tx.refreshToken.updateMany({
+                where: {
+                    session: {
+                        userId: challenge.userId,
+                    },
+                    status: 'ACTIVE'
+                },
+                data: {
+                    status: 'REVOKED',
+                    revokedAt: now
+                }
+            });
+
+            await tx.session.updateMany({
+                where: {
+                    userId: challenge.userId,
+                    status: "ACTIVE"
+                },
+                data: {
+                    status: 'REVOKED',
+                    revokedAt: now,
+                    revocationReason: 'PASSWORD_CHANGED'
+                }
+            });
+
+            await tx.passwordResetChallenge.updateMany({
+                where: {
+                    userId: challenge.userId,
+                    id: {
+                        not: challenge.id
+                    },
+                    usedAt: null,
+                    revokedAt: null
+                },
+                data: {
+                    revokedAt: now
+                }
+            });
+
+            await tx.securityEvent.create({
+                data: {
+                    userId: challenge.userId,
+                    type: 'PASSWORD_RESET_COMPLETED'
+                }
+            });
+
+            const user = await tx.user.findUniqueOrThrow({
+                where: {
+                    id: challenge.userId,
+                },
+                select: {
+                    id: true,
+                    email: true,
+                    firstName: true,
+                }
+            })
+
+            return user;
+        })
+
+        await this.emailService.sendPasswordResetCompletedEmail({
+            to: result.email,
+            firstName: result.firstName
+        })
     }
 }
