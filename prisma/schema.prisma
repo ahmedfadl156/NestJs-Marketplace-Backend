@@ -75,6 +75,7 @@ model User {
   securityEvents              SecurityEvent[]
   seller                      Seller?
   sessions                    Session[]
+  passwordResetChallenges   PasswordResetChallenge[]
 }
 
 model PasswordCredential {
@@ -201,6 +202,21 @@ model RefreshToken {
 
   @@index([sessionId, status])
   @@index([sessionId, createdAt])
+  @@index([expiresAt])
+}
+
+model PasswordResetChallenge {
+  id  String  @id  @default(uuid(7)) @db.Uuid
+  userId  String  @db.Uuid
+  tokenHash  String  @unique
+  expiresAt  DateTime
+  usedAt   DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user  User  @relation(fields: [userId] , references: [id] , onDelete: Cascade)
+
+  @@index([userId , createdAt])
   @@index([expiresAt])
 }
 

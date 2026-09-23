@@ -1,11 +1,18 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule, ObserveInstrument } from './app.module.js';
 import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
+import cookieParser from "cookie-parser"
 
 const logger = new Logger('Bootstarp');
 async function bootstrap() {
   const app = await NestFactory.create(AppModule , {
     instrument: ObserveInstrument,
+  })
+  app.use(cookieParser())
+
+  app.enableCors({
+    origin: 'http://localhost:3000',
+    credentials: true,
   })
   // هنا احنا بنحط Perfix Global بحيث كل الراواتس تبدأ بيه علشان يبقى عندنا طريقة واحدة لكل الرواتس فى البرنامج
   app.setGlobalPrefix('/api')
