@@ -1,8 +1,10 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from "@nestjs/common";
+import { CanActivate, ExecutionContext, Injectable } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { JwtService } from "@nestjs/jwt";
 import { Request } from "express";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator.js";
+import { AuthErrorCode } from "../constants/auth-error-code.js";
+import { AuthException } from "../errors/auth-exception.js";
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -27,7 +29,7 @@ export class JwtAuthGuard implements CanActivate {
         const token = this.extractTokenFromHeader(request);
 
         if(!token){
-            throw new UnauthorizedException('Unauthorized'); 
+            throw new AuthException(AuthErrorCode.INVALID_ACCESS_TOKEN, 'Unauthorized');
         }
 
         try {
@@ -40,7 +42,7 @@ export class JwtAuthGuard implements CanActivate {
 
             return true;
         } catch (error) {
-            throw new UnauthorizedException('Unauthorized');
+            throw new AuthException(AuthErrorCode.INVALID_ACCESS_TOKEN, 'Unauthorized');
         }
     }
 
