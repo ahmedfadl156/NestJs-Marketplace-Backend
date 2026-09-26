@@ -96,8 +96,11 @@ export class AuthController {
 
     @Post('forgot-password')
     @Public()
-    async forgotPassword(@Body() dto: ForgotPasswordDto) {
-        await this.authService.forgotPassword(dto);
+    async forgotPassword(@Body() dto: ForgotPasswordDto ,  @Req()  request: Request) {
+        await this.authService.forgotPassword(dto , {
+            ipAddress: request.ip,
+            userAgent: request.get('user-agent'),
+        });
         return {
             message: 'If the email address is registered, a password reset email will be sent.'
         }

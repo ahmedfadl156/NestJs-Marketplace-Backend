@@ -13,6 +13,8 @@ import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { EmailModule } from '../infrastructure/email/email.module.js';
+import { RedisModule } from '../infrastructure/redis/redis.module.js';
+import { RateLimitModule } from '../common/rate-limit/rate-limit.module.js';
 
 @Module({
     imports: [
@@ -24,7 +26,9 @@ import { EmailModule } from '../infrastructure/email/email.module.js';
                 secret: configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
             }),
         }),
-        EmailModule
+        EmailModule,
+        RedisModule,
+        RateLimitModule
     ],
     controllers: [AuthController],
     providers: [

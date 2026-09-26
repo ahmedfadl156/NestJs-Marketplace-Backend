@@ -53,6 +53,9 @@ class EnvironmentVariables {
     @IsString()
     AUTH_REFRESH_COOKIE_SAME_SITE: string;
 
+    @IsString()
+    REDIS_URL: string;
+
 }
 
 export function validate(config: Record<string , unknown>){

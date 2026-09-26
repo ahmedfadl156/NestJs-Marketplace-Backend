@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto.js';
 import { EmailNormalizer } from './security/email-normalizer.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -14,6 +14,11 @@ import { EMAIL_SERVICE } from '../infrastructure/email/email.token.js';
 import type { EmailService } from '../infrastructure/email/email.service.js';
 import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
+import { AuthErrorCode } from './constants/auth-error-code.js';
+import { AuthException } from './errors/auth-exception.js';
+import { RateLimitService } from '../common/rate-limit/rate-limit.service.js';
+import { forgotPasswordAccountIpLimitKey, forgotPasswordAccountRateLimitKey, loginAccountFailureKey, loginIpRateLimitKey, verifyEmailIpRateLimitKey } from './auth-rate-limit.keys.js';
+import { FORGOT_PASSWORD_ACCOUNT_RATE_LIMIT, FORGOT_PASSWORD_IP_RATE_LIMIT, LOGIN_ACCOUNT_FAILURE_LIMIT, LOGIN_IP_RATE_LIMIT, VERIFY_EMAIL_IP_RATE_LIMIT } from './auth-rate-limit.policy.js';
 
 const DUMMY_PASSWORD_HASH = '$argon2id$v=19$m=65536,p=4,t=3$Ifde6UBO/pNuST7SmySUdA$RClZtJrlvvBQ6XceJgEryBWx2ch0meLdFDLsFwPvzwg';
 
@@ -30,6 +35,7 @@ export class AuthService {
         private readonly tokenService: TokenService,
         @Inject(EMAIL_SERVICE)
         private readonly emailService: EmailService,
+        private readonly rateLimitService: RateLimitService,
     ){}
     // الفانكشن الخاصة السيرفس بعملية تسجيل مستخدم جديد
     async register(dto: RegisterDto , context: AuthRequestContext) {
@@ -114,9 +120,28 @@ export class AuthService {
     }
 
     // الفانكشن الخاصة بتأكيد الاييمل
-    async verifyEmail(token: string) {
+    async verifyEmail(token: string , context: AuthRequestContext) {
+        // هنعمل الاول Rate Limit عن طريق ا ل IP علشان نحمى لراوت من ارسال ايميلات كتير وهمية
+        if(context.ipAddress){
+            const result = await this.rateLimitService.consume({
+                key: verifyEmailIpRateLimitKey(context.ipAddress),
+                limit: VERIFY_EMAIL_IP_RATE_LIMIT.limit,
+                windowSeconds: VERIFY_EMAIL_IP_RATE_LIMIT.windowSecond
+            });
+
+            if(!result.allowed){
+                throw new AuthException(
+                    AuthErrorCode.AUTH_RATE_LIMITED,
+                    'Too many authentication attempts. Please try again later.',
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    result.retryAfterSeconds
+                )
+            }
+        };
+        // هنا هنعمل هاش للتوكن اللى جاى علشان نخزنه متشفر فى الداتابيز
         const tokenHash = this.verificationTokenService.hash(token);
 
+        // هنبدا هنا نعمل عمليات الداتابيز عن طريق الترانزاكشن علشان كلها تتم مع بعض او لا
         return this.prisma.$transaction(async (tx) => {
             const challenge = await tx.emailVerificationChallenge.findUnique({
                 where: {
@@ -185,15 +210,55 @@ export class AuthService {
 
 // دى هنا السيرفيس الخاصة بتسجيل الدخول لليوزر
     async login(dto: LoginDto , context: AuthRequestContext) {
+        // اول حاجة هنعمل rate limit for the IP Address
+        if(context.ipAddress){
+            const ipResult = await this.rateLimitService.consume({
+                key: loginIpRateLimitKey(context.ipAddress),
+                limit: LOGIN_IP_RATE_LIMIT.limit,
+                windowSeconds: LOGIN_IP_RATE_LIMIT.windowSeconds,
+            })
+
+            if(!ipResult.allowed){
+                throw new AuthException(
+                    AuthErrorCode.AUTH_RATE_LIMITED,
+                    'Too many authentication attempts. Please try again later.',
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    ipResult.retryAfterSeconds,
+                )
+            }
+        }
         // اول حاجة هنظبط الايميل
         const email = this.emailNormalizer.normalize(dto.email);
+
+        // بعديهن هنعمل Account Level Security
+        // ودا علشان نعمل حماية على عدد مرات تسجيل دخول الاكونت ميجربش كتير
+        const accountKey = loginAccountFailureKey(email);
+
+        const accountResult = await this.rateLimitService.check({
+            key: accountKey,
+            limit: LOGIN_ACCOUNT_FAILURE_LIMIT.limit,
+            windowSeconds: LOGIN_ACCOUNT_FAILURE_LIMIT.windowSeconds,
+        });
+
+        if(!accountResult.allowed){
+            throw new AuthException(
+                AuthErrorCode.AUTH_RATE_LIMITED,
+                'Too many authentication attempts. Please try again later.',
+                HttpStatus.TOO_MANY_REQUESTS,
+                accountResult.retryAfterSeconds,
+            )
+        }
         // هنجيب اليوزر ونتأكد انه موجود ومعلوماته صحيحة
         const user = await this.usersService.findForAuthentication(email);
 
         if(!user || !user.passwordCredential){
             await this.passwordHasher.verify(dto.password, DUMMY_PASSWORD_HASH);
-            throw new UnauthorizedException('Invalid Email or Password');
+            throw new AuthException(
+                AuthErrorCode.INVALID_CREDENTIALS,
+                'Invalid Email or Password',
+            );
         }
+
         // هنعمل verify للباسورد ونتاكد انه صح
         const passwordValid = await this.passwordHasher.verify(
             dto.password,
@@ -202,11 +267,17 @@ export class AuthService {
 
         // لو غلط هنرمى ايرور
         if(!passwordValid){
-            throw new UnauthorizedException("Invalid Email or Password");
+            throw new AuthException(
+                AuthErrorCode.INVALID_CREDENTIALS,
+                'Invalid Email or Password',
+            );
         }
 
         if(user.status !== 'ACTIVE') {
-            throw new UnauthorizedException("Invalid Email or Password");
+            throw new AuthException(
+                AuthErrorCode.INVALID_CREDENTIALS,
+                'Invalid Email or Password',
+            );
         }
         // لو صح هنظبط التوكنز بتاعتنا ونبدا سيشن علشان نخزن الملعومات ونبدا سيشن لليورز
         const rawRefreshToken = this.tokenService.generateRefreshToken();
@@ -263,47 +334,6 @@ export class AuthService {
             refreshToken: rawRefreshToken
         }
     }
-
-
-    /*
-    RefreshToken
-      │
-      ▼
-hash(token)
-      │
-      ▼
-find RefreshToken
-      │
-      ├── not found ──────→ 401
-      │
-      ├── USED ────────────→ replay detection
-      │
-      ├── REVOKED ─────────→ 401
-      │
-      ├── expired ─────────→ 401
-      │
-      ▼
-validate Session
-      │
-      ▼
-mark old token USED
-      │
-      ▼
-create new RefreshToken
-      │
-      ▼
-link old → new
-      │
-      ▼
-update Session.lastUsedAt
-      │
-      ▼
-SecurityEvent
-      │
-      ▼
-new AccessToken
-*/
-
 // الميثود اللى هنستعلمها علشان نكتشف لما يحصل استخدام خاطى لتوكن تم اتسخدامه قبل كدا
     private async handleRefreshTokenReplay(
         sessionId: string,
@@ -363,23 +393,35 @@ new AccessToken
         });
 
         if(!refreshToken){
-            throw new UnauthorizedException("Invalid refresh token");
+            throw new AuthException(
+                AuthErrorCode.INVALID_REFRESH_TOKEN,
+                'Invalid refresh token',
+            );
         }
 
         if(refreshToken.status === 'USED'){
             await this.handleRefreshTokenReplay(refreshToken.sessionId , context);
 
-            throw new UnauthorizedException('Invalid refresh token');
+            throw new AuthException(
+                AuthErrorCode.INVALID_REFRESH_TOKEN,
+                'Invalid refresh token',
+            );
         }
 
         if(refreshToken.status !== 'ACTIVE' || refreshToken.expiresAt <= now){
-            throw new UnauthorizedException('Invalid refresh token');
+            throw new AuthException(
+                AuthErrorCode.INVALID_REFRESH_TOKEN,
+                'Invalid refresh token',
+            );
         }
 
         const session = refreshToken.session;
 
         if(session.status !== 'ACTIVE' || session.absoluteExpiresAt <= now || session.idleExpiresAt <= now){
-            throw new UnauthorizedException('Invalid refresh token');
+            throw new AuthException(
+                AuthErrorCode.INVALID_REFRESH_TOKEN,
+                'Invalid refresh token',
+            );
         }
 
         const newRawRefreshToken = this.tokenService.generateRefreshToken();
@@ -406,7 +448,10 @@ new AccessToken
             });
 
             if(consumed.count !== 1){
-                throw new UnauthorizedException("Invalid refresh token");
+                throw new AuthException(
+                    AuthErrorCode.INVALID_REFRESH_TOKEN,
+                    'Invalid refresh token',
+                );
             }
 
             const newRefreshToken = await tx.refreshToken.create({
@@ -529,31 +574,51 @@ new AccessToken
         const user = await this.usersService.findCurrentUserById(userId);
 
         if(!user){
-            throw new UnauthorizedException("Unaouthorized.");
+            throw new AuthException(
+                AuthErrorCode.INVALID_ACCESS_TOKEN,
+                'Unaouthorized.',
+            );
         }
 
         return user;
     }
 
+    async forgotPassword(dto: ForgotPasswordDto , context: AuthRequestContext): Promise<void> {
+        // هنعمل هنا ال rate limit by IP
+        if(context.ipAddress){
+            const ipResult = await this.rateLimitService.consume({
+                key: forgotPasswordAccountIpLimitKey(context.ipAddress),
+                limit: FORGOT_PASSWORD_IP_RATE_LIMIT.limit,
+                windowSeconds: FORGOT_PASSWORD_IP_RATE_LIMIT.windowSecond
+            });
 
-    /*
-        1-Forgot Password => POST Request for route
-        2-email input
-        3-search if email exist or not 
-        4-if exist send random reset token and send it to the user
-        5-then user sned with token link
-        6- Reset Password => POST Request for the route by the link
-        7- token validate
-        8-new password input
-        9- hash the password by argon2id
-        10- save the hahsed password in DB
-        11- revoke old sessions
-        12- create secuirty event for changing password
-    */ 
-
-    async forgotPassword(dto: ForgotPasswordDto): Promise<void> {
+            if(!ipResult.allowed){
+                throw new AuthException(
+                    AuthErrorCode.AUTH_RATE_LIMITED,
+                    'Too many authentication attempts. Please try again later.',
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    ipResult.retryAfterSeconds
+                )
+            }
+        };
         // الاول هنعمل نورماليز للايميل علشان يبقى جاى مظبوط
         const email = this.emailNormalizer.normalize(dto.email);
+
+        // هنعمل هنا ال rate limit for account
+        const accountResult = await this.rateLimitService.consume({
+            key: forgotPasswordAccountRateLimitKey(email),
+            limit: FORGOT_PASSWORD_ACCOUNT_RATE_LIMIT.limit,
+            windowSeconds: FORGOT_PASSWORD_ACCOUNT_RATE_LIMIT.windowSecond
+        });
+
+        if(!accountResult.allowed){
+            throw new AuthException(
+                AuthErrorCode.AUTH_RATE_LIMITED,
+                "Too many authentication attempts. Please try again later.",
+                HttpStatus.TOO_MANY_REQUESTS,
+                accountResult.retryAfterSeconds
+            )
+        };
         // هناخد الايميل علشان نشوف هل موجود ولا لا يوزر مرتبط بالايميل دا
         const user = await this.usersService.findByEmail(email);
 
@@ -606,11 +671,17 @@ new AccessToken
             });
 
             if(!challenge){
-                throw new UnauthorizedException('Invalid or expired password reset token');
+                throw new AuthException(
+                    AuthErrorCode.INVALID_PASSWORD_RESET_TOKEN,
+                    'Invalid or expired password reset token',
+                );
             }
 
             if(challenge.usedAt || challenge.revokedAt || challenge.expiresAt <= now){
-                throw new UnauthorizedException('Invalid or expired password reset token');
+                throw new AuthException(
+                    AuthErrorCode.INVALID_PASSWORD_RESET_TOKEN,
+                    'Invalid or expired password reset token',
+                );
             }
 
             const consumed = await tx.passwordResetChallenge.updateMany({
@@ -628,7 +699,10 @@ new AccessToken
             });
 
             if(consumed.count !== 1){
-                throw new UnauthorizedException('Invalid or expired password reset token'); 
+                throw new AuthException(
+                    AuthErrorCode.INVALID_PASSWORD_RESET_TOKEN,
+                    'Invalid or expired password reset token',
+                );
             };
 
             await tx.passwordCredential.update({
